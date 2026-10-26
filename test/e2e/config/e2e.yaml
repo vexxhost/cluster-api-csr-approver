@@ -92,6 +92,9 @@ variables:
   DOCKER_SERVICE_DOMAIN: "cluster.local"
   DOCKER_SERVICE_CIDRS: "10.128.0.0/12"
   DOCKER_POD_CIDRS: "192.168.0.0/16"
+  # Referenced by the kindnet manifest from the Cluster API e2e data.
+  DOCKER_SERVICE_IPV6_CIDRS: "fd00:100:64::/108"
+  DOCKER_POD_IPV6_CIDRS: "fd00:100:96::/48"
   CNI: "./data/cni/kindnet/kindnet.yaml"
   EXP_CLUSTER_RESOURCE_SET: "true"
   CLUSTER_TOPOLOGY: "true"
