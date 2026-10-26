@@ -92,7 +92,7 @@ Images are published to `ghcr.io/vexxhost/cluster-api-csr-approver`.
 
 | clusterctl variable | Flag | Default | Description |
 |---|---|---|---|
-| `CSR_APPROVER_CLUSTER_SELECTOR` | `--cluster-selector` | all Clusters | Label selector for the Clusters to handle, e.g. `csr-approver.vexxhost.com/enabled=true`. The controller doesn't even connect to other Clusters. |
+| `CSR_APPROVER_CLUSTER_SELECTOR` | `--cluster-selector` | `csr-approver.vexxhost.com/disabled!=true` | Label selector for the Clusters to handle. The default handles every Cluster except those labeled `csr-approver.vexxhost.com/disabled=true`. Set it to e.g. `csr-approver.vexxhost.com/enabled=true` to make the controller opt-in. It doesn't connect to Clusters outside the selector. |
 | `CSR_APPROVER_DENY_INVALID` | `--deny-invalid` | `false` | Deny failing requests instead of leaving them pending. |
 | `CSR_APPROVER_MAX_EXPIRATION` | `--max-expiration` | `0s` (off) | Maximum lifetime a request may ask for through `spec.expirationSeconds`. |
 | `CSR_APPROVER_DIAGNOSTICS_ADDRESS` | `--diagnostics-address` | `:8443` | Metrics and diagnostics endpoint, authenticated by default as in Cluster API. |

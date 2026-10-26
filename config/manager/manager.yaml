@@ -31,7 +31,10 @@ spec:
             - /manager
           args:
             - --leader-elect
-            - "--cluster-selector=${CSR_APPROVER_CLUSTER_SELECTOR:=}"
+            # clusterctl treats an empty default as a required variable, so the
+            # default selector matches every Cluster except those labeled
+            # csr-approver.vexxhost.com/disabled=true.
+            - "--cluster-selector=${CSR_APPROVER_CLUSTER_SELECTOR:=csr-approver.vexxhost.com/disabled!=true}"
             - "--deny-invalid=${CSR_APPROVER_DENY_INVALID:=false}"
             - "--max-expiration=${CSR_APPROVER_MAX_EXPIRATION:=0s}"
             - "--diagnostics-address=${CSR_APPROVER_DIAGNOSTICS_ADDRESS:=:8443}"
