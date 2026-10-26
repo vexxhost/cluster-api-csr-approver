@@ -1,4 +1,24 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>vexxhost/.github"]
+  "extends": ["github>vexxhost/.github"],
+  "packageRules": [
+    {
+      "description": "Update all Cluster API modules together.",
+      "matchDatasources": ["go"],
+      "matchPackageNames": ["sigs.k8s.io/cluster-api", "sigs.k8s.io/cluster-api/**"],
+      "groupName": "cluster-api"
+    },
+    {
+      "description": "Kubernetes libraries, controller-runtime, Ginkgo and Gomega follow the versions pinned by Cluster API; only take patch updates on their own.",
+      "matchDatasources": ["go"],
+      "matchPackageNames": [
+        "k8s.io/**",
+        "sigs.k8s.io/controller-runtime",
+        "github.com/onsi/ginkgo/v2",
+        "github.com/onsi/gomega"
+      ],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    }
+  ]
 }
