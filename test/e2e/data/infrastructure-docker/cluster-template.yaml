@@ -1,0 +1,170 @@
+# A CAPD workload cluster with kubelet serving certificates enabled.
+#
+# Based on the Cluster API e2e templates (test/e2e/data/infrastructure-docker/main/bases).
+# Every kubelet sets serverTLSBootstrap through a kubeadm KubeletConfiguration
+# patch, as documented in the Cluster API book, and kube-apiserver verifies
+# kubelet serving certificates with the cluster CA. Logs, exec, port-forward
+# and the KubeadmControlPlane etcd health checks only work once
+# cluster-api-csr-approver has approved each node's serving certificate.
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: DevCluster
+metadata:
+  name: "${CLUSTER_NAME}"
+spec:
+  backend:
+    docker:
+      failureDomains:
+        - name: fd1
+          controlPlane: true
+        - name: fd2
+          controlPlane: true
+        - name: fd3
+          controlPlane: true
+        - name: fd4
+          controlPlane: false
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cni: "${CLUSTER_NAME}-crs-0"
+spec:
+  clusterNetwork:
+    services:
+      cidrBlocks: ["${DOCKER_SERVICE_CIDRS}"]
+    pods:
+      cidrBlocks: ["${DOCKER_POD_CIDRS}"]
+    serviceDomain: "${DOCKER_SERVICE_DOMAIN}"
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: DevCluster
+    name: "${CLUSTER_NAME}"
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KubeadmControlPlane
+    name: "${CLUSTER_NAME}-control-plane"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: DevMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-control-plane"
+spec:
+  template:
+    spec:
+      backend:
+        docker:
+          extraMounts:
+            - containerPath: "/var/run/docker.sock"
+              hostPath: "/var/run/docker.sock"
+          preLoadImages: ${DOCKER_PRELOAD_IMAGES:-[]}
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlane
+metadata:
+  name: "${CLUSTER_NAME}-control-plane"
+spec:
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+  version: "${KUBERNETES_VERSION}"
+  machineTemplate:
+    spec:
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: DevMachineTemplate
+        name: "${CLUSTER_NAME}-control-plane"
+  kubeadmConfigSpec:
+    clusterConfiguration:
+      apiServer:
+        certSANs: [localhost, 127.0.0.1, 0.0.0.0, host.docker.internal]
+        extraArgs:
+          - name: kubelet-certificate-authority
+            value: /etc/kubernetes/pki/ca.crt
+    initConfiguration:
+      patches:
+        directory: /etc/kubernetes/patches
+    joinConfiguration:
+      patches:
+        directory: /etc/kubernetes/patches
+    files:
+      - path: /etc/kubernetes/patches/kubeletconfiguration0+strategic.json
+        owner: root:root
+        permissions: "0644"
+        content: |
+          {"apiVersion": "kubelet.config.k8s.io/v1beta1", "kind": "KubeletConfiguration", "serverTLSBootstrap": true}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: DevMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  template:
+    spec:
+      backend:
+        docker:
+          extraMounts:
+            - containerPath: "/var/run/docker.sock"
+              hostPath: "/var/run/docker.sock"
+          preLoadImages: ${DOCKER_PRELOAD_IMAGES:-[]}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        patches:
+          directory: /etc/kubernetes/patches
+      files:
+        - path: /etc/kubernetes/patches/kubeletconfiguration0+strategic.json
+          owner: root:root
+          permissions: "0644"
+          content: |
+            {"apiVersion": "kubelet.config.k8s.io/v1beta1", "kind": "KubeletConfiguration", "serverTLSBootstrap": true}
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  clusterName: "${CLUSTER_NAME}"
+  replicas: ${WORKER_MACHINE_COUNT}
+  selector:
+    matchLabels:
+  template:
+    spec:
+      clusterName: "${CLUSTER_NAME}"
+      version: "${KUBERNETES_VERSION}"
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: "${CLUSTER_NAME}-md-0"
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: DevMachineTemplate
+        name: "${CLUSTER_NAME}-md-0"
+      failureDomain: fd4
+---
+# CNI, installed with a ClusterResourceSet like the Cluster API e2e tests.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "cni-${CLUSTER_NAME}-crs-0"
+data: ${CNI_RESOURCES}
+binaryData:
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta2
+kind: ClusterResourceSet
+metadata:
+  name: "${CLUSTER_NAME}-crs-0"
+spec:
+  strategy: ApplyOnce
+  clusterSelector:
+    matchLabels:
+      cni: "${CLUSTER_NAME}-crs-0"
+  resources:
+    - name: "cni-${CLUSTER_NAME}-crs-0"
+      kind: ConfigMap

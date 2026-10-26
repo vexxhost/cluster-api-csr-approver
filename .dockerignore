@@ -1,0 +1,6 @@
+.git
+bin
+out
+_artifacts
+hack/tools/bin
+hack/tools/envtest

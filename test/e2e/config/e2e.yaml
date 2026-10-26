@@ -1,0 +1,113 @@
+# E2E test configuration for the Cluster API test framework.
+#
+# A kind management cluster gets Cluster API, the kubeadm providers and CAPD
+# from the v1.14.3 release, plus cluster-api-csr-approver as a clusterctl
+# AddonProvider built from config/default with the locally built image.
+managementClusterName: capi-csr-approver-e2e
+
+images:
+  - name: ghcr.io/vexxhost/cluster-api-csr-approver:e2e
+    loadBehavior: mustLoad
+  - name: registry.k8s.io/cluster-api/cluster-api-controller:v1.14.3
+    loadBehavior: tryLoad
+  - name: registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.3
+    loadBehavior: tryLoad
+  - name: registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.3
+    loadBehavior: tryLoad
+  - name: gcr.io/k8s-staging-cluster-api/capd-manager:v1.14.3
+    loadBehavior: tryLoad
+
+providers:
+  - name: cluster-api
+    type: CoreProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: --metrics-addr=127.0.0.1:8080
+            new: --metrics-addr=:8080
+
+  - name: kubeadm
+    type: BootstrapProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/bootstrap-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: --metrics-addr=127.0.0.1:8080
+            new: --metrics-addr=:8080
+
+  - name: kubeadm
+    type: ControlPlaneProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/control-plane-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+
+  - name: docker
+    type: InfrastructureProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/infrastructure-components-development.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+          - sourcePath: ../data/infrastructure-docker/cluster-template.yaml
+        replacements:
+          - old: --metrics-addr=127.0.0.1:8080
+            new: --metrics-addr=:8080
+
+  - name: csr-approver
+    type: AddonProvider
+    versions:
+      # "vNext": manifests built from the local kustomize sources.
+      - name: v0.1.99
+        value: ../../../config/default
+        type: kustomize
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/csr-approver/metadata.yaml
+        replacements:
+          - old: ghcr.io/vexxhost/cluster-api-csr-approver:main
+            new: ghcr.io/vexxhost/cluster-api-csr-approver:e2e
+          - old: "--v=${CSR_APPROVER_LOG_LEVEL:=2}"
+            new: "--v=4"
+
+variables:
+  KUBERNETES_VERSION: "v1.37.0"
+  DOCKER_SERVICE_DOMAIN: "cluster.local"
+  DOCKER_SERVICE_CIDRS: "10.128.0.0/12"
+  DOCKER_POD_CIDRS: "192.168.0.0/16"
+  CNI: "./data/cni/kindnet/kindnet.yaml"
+  EXP_CLUSTER_RESOURCE_SET: "true"
+  CLUSTER_TOPOLOGY: "true"
+  CAPI_DIAGNOSTICS_ADDRESS: ":8080"
+  CAPI_INSECURE_DIAGNOSTICS: "true"
+  CSR_APPROVER_INSECURE_DIAGNOSTICS: "true"
+  CSR_APPROVER_DIAGNOSTICS_ADDRESS: ":8080"
+
+intervals:
+  default/wait-controllers: ["5m", "10s"]
+  default/wait-cluster: ["5m", "10s"]
+  default/wait-control-plane: ["15m", "10s"]
+  default/wait-worker-nodes: ["10m", "10s"]
+  default/wait-machine-pool-nodes: ["5m", "10s"]
+  default/wait-delete-cluster: ["5m", "10s"]
+  default/wait-nodes-ready: ["10m", "10s"]
+  default/wait-csr-approved: ["5m", "5s"]
+  default/wait-kubelet-logs: ["5m", "5s"]
+  default/check-csr-pending: ["1m", "5s"]
