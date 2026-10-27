@@ -27,11 +27,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
+// workerMachineCountVariable sets the number of workers in the e2e config, so
+// the same spec fits CAPD and a small devstack.
+const workerMachineCountVariable = "CSR_E2E_WORKER_MACHINE_COUNT"
+
 var _ = Describe("When creating a workload cluster with kubelet serving certificates [PR-Blocking]", func() {
 	// The Cluster API quick start spec creates the cluster, waits for every
 	// Machine, collects logs and cleans up. The CSR checks run once the
 	// Machines are provisioned.
 	capie2e.QuickStartSpec(ctx, func() capie2e.QuickStartSpecInput {
+		workers := *e2eConfig.MustGetInt64PtrVariable(workerMachineCountVariable)
 		return capie2e.QuickStartSpecInput{
 			E2EConfig:                e2eConfig,
 			ClusterctlConfigPath:     clusterctlConfigPath,
@@ -39,12 +44,12 @@ var _ = Describe("When creating a workload cluster with kubelet serving certific
 			ArtifactFolder:           artifactFolder,
 			SkipCleanup:              skipCleanup,
 			ControlPlaneMachineCount: ptr.To[int64](1),
-			WorkerMachineCount:       ptr.To[int64](2),
+			WorkerMachineCount:       ptr.To(workers),
 			PostMachinesProvisioned: func(managementClusterProxy framework.ClusterProxy, namespace, clusterName string) {
 				spec := newCSRSpec(managementClusterProxy, namespace, clusterName)
 
 				By("Checking every node has an approved, CA-signed kubelet serving certificate")
-				spec.expectAllNodesApproved()
+				spec.expectAllNodesApproved(int(1 + workers))
 
 				By("Checking kube-apiserver can reach every kubelet while verifying its serving certificate")
 				spec.expectLogsFromEveryNode()
@@ -53,7 +58,7 @@ var _ = Describe("When creating a workload cluster with kubelet serving certific
 				spec.expectForgedCSRPending()
 
 				By("Checking a new worker gets its kubelet serving certificate approved")
-				spec.scaleWorkersAndExpectApproval(3)
+				spec.scaleWorkersAndExpectApproval(int32(workers + 1))
 			},
 		}
 	})

@@ -1,0 +1,137 @@
+# E2E test configuration for running against CAPO on a devstack OpenStack.
+#
+# A kind management cluster gets Cluster API v1.14.3, CAPO v0.15.1, the
+# OpenStack Resource Controller and cluster-api-csr-approver. The workload
+# cluster runs on devstack, with the OpenStack cloud controller manager setting
+# Node addresses, so approval depends on the addresses CAPO reports.
+#
+# These variables must come from the environment (see .github/workflows/e2e-openstack.yml):
+#   OPENSTACK_CLOUD_YAML_B64           base64 clouds.yaml with the OPENSTACK_CLOUD entry
+#   OPENSTACK_CLOUD_PROVIDER_CONF_B64  base64 cloud.conf for the cloud controller manager
+managementClusterName: capi-csr-approver-e2e-openstack
+
+images:
+  - name: ghcr.io/vexxhost/cluster-api-csr-approver:e2e
+    loadBehavior: mustLoad
+  - name: registry.k8s.io/capi-openstack/capi-openstack-controller:v0.15.1
+    loadBehavior: tryLoad
+  - name: quay.io/orc/openstack-resource-controller:v2.6.0
+    loadBehavior: tryLoad
+
+providers:
+  - name: cluster-api
+    type: CoreProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: --metrics-addr=127.0.0.1:8080
+            new: --metrics-addr=:8080
+
+  - name: kubeadm
+    type: BootstrapProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/bootstrap-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: --metrics-addr=127.0.0.1:8080
+            new: --metrics-addr=:8080
+
+  - name: kubeadm
+    type: ControlPlaneProvider
+    versions:
+      - name: v1.14.3
+        value: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/control-plane-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capi/metadata.yaml
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+
+  - name: openstack
+    type: InfrastructureProvider
+    versions:
+      - name: v0.15.1
+        value: https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/download/v0.15.1/infrastructure-components.yaml
+        type: url
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/capo/metadata.yaml
+          - sourcePath: ../data/infrastructure-openstack/cluster-template.yaml
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--v=2"
+            new: "--v=4"
+
+  # ORC isn't a provider; CAPO's e2e suite installs it the same way.
+  - name: openstack-resource-controller
+    type: RuntimeExtensionProvider
+    versions:
+      - name: v2.6.0
+        value: ../data/openstack-resource-controller
+        type: kustomize
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/openstack-resource-controller/metadata.yaml
+
+  - name: csr-approver
+    type: AddonProvider
+    versions:
+      - name: v0.1.99
+        value: ../../../config/default
+        type: kustomize
+        contract: v1beta2
+        files:
+          - sourcePath: ../data/shared/csr-approver/metadata.yaml
+        replacements:
+          - old: ghcr.io/vexxhost/cluster-api-csr-approver:main
+            new: ghcr.io/vexxhost/cluster-api-csr-approver:e2e
+          - old: "--v=${CSR_APPROVER_LOG_LEVEL:=2}"
+            new: "--v=4"
+
+variables:
+  # Must match the Kubernetes version baked into OPENSTACK_IMAGE_NAME.
+  KUBERNETES_VERSION: "v1.36.1"
+  CNI: "./data/cni/calico/calico.yaml"
+  CCM: "./data/ccm/cloud-controller-manager.yaml"
+  EXP_CLUSTER_RESOURCE_SET: "true"
+  CLUSTER_TOPOLOGY: "true"
+  CAPI_DIAGNOSTICS_ADDRESS: ":8080"
+  CAPI_INSECURE_DIAGNOSTICS: "true"
+  CSR_APPROVER_INSECURE_DIAGNOSTICS: "true"
+  CSR_APPROVER_DIAGNOSTICS_ADDRESS: ":8080"
+  # devstack resources created by the workflow.
+  OPENSTACK_CLOUD: "devstack"
+  OPENSTACK_CLOUD_CACERT_B64: "Cg=="
+  OPENSTACK_DNS_NAMESERVERS: "1.1.1.1"
+  OPENSTACK_FAILURE_DOMAIN: "nova"
+  OPENSTACK_EXTERNAL_NETWORK_NAME: "public"
+  OPENSTACK_CONTROL_PLANE_MACHINE_FLAVOR: "ds2G"
+  OPENSTACK_NODE_MACHINE_FLAVOR: "ds2G"
+  OPENSTACK_IMAGE_NAME: "ubuntu-24.04-v1.36.1"
+  OPENSTACK_SSH_KEY_NAME: "csr-approver-e2e"
+  # A GitHub runner fits a devstack with three small VMs: the control plane,
+  # one worker and the worker added by the scale-up check.
+  CSR_E2E_WORKER_MACHINE_COUNT: "1"
+
+intervals:
+  default/wait-controllers: ["10m", "10s"]
+  default/wait-cluster: ["20m", "10s"]
+  default/wait-control-plane: ["30m", "10s"]
+  default/wait-worker-nodes: ["30m", "10s"]
+  default/wait-delete-cluster: ["15m", "10s"]
+  default/wait-nodes-ready: ["20m", "10s"]
+  default/wait-csr-approved: ["10m", "10s"]
+  default/wait-kubelet-logs: ["10m", "10s"]
+  default/check-csr-pending: ["1m", "5s"]
