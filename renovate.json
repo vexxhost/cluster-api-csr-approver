@@ -17,6 +17,12 @@
         "github.com/onsi/ginkgo/v2",
         "github.com/onsi/gomega"
       ],
+      "matchUpdateTypes": ["major", "minor", "digest"],
+      "enabled": false
+    },
+    {
+      "description": "Build with the Go minor version Cluster API uses (go.mod, workflows and the golang image); only take patch updates on their own.",
+      "matchPackageNames": ["go", "golang"],
       "matchUpdateTypes": ["major", "minor"],
       "enabled": false
     }
