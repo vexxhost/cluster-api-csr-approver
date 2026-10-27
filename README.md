@@ -173,17 +173,35 @@ make test      # unit tests and envtest integration tests (real kube-apiserver a
 make lint      # golangci-lint
 make verify    # generated RBAC and go.mod are up to date
 make test-e2e  # kind + CAPD end-to-end tests, requires Docker
+make test-e2e-openstack  # the same tests against CAPO, requires an OpenStack cloud
 ```
 
 The end-to-end suite uses the Cluster API test framework. It creates a kind
-management cluster, installs Cluster API v1.14, CAPD and this controller as a
-clusterctl add-on provider, and runs the Cluster API quick start with a cluster
-whose kubelets request serving certificates. It checks that:
+management cluster, installs Cluster API v1.14, an infrastructure provider and
+this controller as a clusterctl add-on provider, and runs the Cluster API quick
+start with a cluster whose kubelets request serving certificates. It checks that:
 
 - every node gets a certificate signed by the cluster CA;
 - kube-apiserver can read logs through every kubelet while verifying it;
 - a forged request from a node asking for an IP it doesn't own stays pending;
 - a worker added by scaling the MachineDeployment is approved too.
+
+CI runs it twice:
+
+- **CAPD** ([e2e.yml](.github/workflows/e2e.yml)): workload cluster nodes are
+  Docker containers, and Node addresses come from the kubelet.
+- **CAPO** ([e2e-openstack.yml](.github/workflows/e2e-openstack.yml)):
+  devstack runs inside the GitHub runner, the same approach as
+  [vexxhost/capo-image-elements](https://github.com/vexxhost/capo-image-elements).
+  CAPO v0.15 and the OpenStack Resource Controller are installed with
+  clusterctl, and nodes boot from a capo-image-elements image. The OpenStack
+  cloud controller manager sets Node addresses, and the control plane gets a
+  floating IP, so approval depends on the addresses CAPO reports on Machines.
+
+To run the CAPO tests against your own cloud, export `OS_CLOUD`,
+`OPENSTACK_CLOUD_YAML_B64` and `OPENSTACK_CLOUD_PROVIDER_CONF_B64`. Then
+adjust the image, flavor, network and key names in
+[test/e2e/config/openstack.yaml](test/e2e/config/openstack.yaml).
 
 ## License
 

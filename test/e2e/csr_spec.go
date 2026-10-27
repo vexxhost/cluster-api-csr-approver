@@ -96,18 +96,20 @@ func (s *csrSpec) clusterCA() *x509.CertPool {
 	return pool
 }
 
-// approvedCertificate returns the issued serving certificate for a node, or an
-// error explaining why there is none yet.
-func (s *csrSpec) approvedCertificate(node *corev1.Node) (*x509.Certificate, error) {
+// approvedCertificates returns the serving certificates issued for a node
+// through CSRs this controller approved, or an error listing the node's CSRs
+// when there are none yet.
+func (s *csrSpec) approvedCertificates(nodeName string) ([]*x509.Certificate, error) {
 	csrs := &certificatesv1.CertificateSigningRequestList{}
 	if err := s.workload.GetClient().List(ctx, csrs); err != nil {
 		return nil, err
 	}
 
+	var certs []*x509.Certificate
 	var states []string
 	for i := range csrs.Items {
 		c := &csrs.Items[i]
-		if c.Spec.SignerName != certificatesv1.KubeletServingSignerName || c.Spec.Username != csr.NodeUserPrefix+node.Name {
+		if c.Spec.SignerName != certificatesv1.KubeletServingSignerName || c.Spec.Username != csr.NodeUserPrefix+nodeName {
 			continue
 		}
 		approvedByUs := slices.ContainsFunc(c.Status.Conditions, func(cond certificatesv1.CertificateSigningRequestCondition) bool {
@@ -121,9 +123,28 @@ func (s *csrSpec) approvedCertificate(node *corev1.Node) (*x509.Certificate, err
 		if block == nil {
 			return nil, fmt.Errorf("CSR %s has an invalid certificate", c.Name)
 		}
-		return x509.ParseCertificate(block.Bytes)
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("CSR %s: %w", c.Name, err)
+		}
+		certs = append(certs, cert)
 	}
-	return nil, fmt.Errorf("no approved and issued kubelet serving CSR for node %s yet, found %v", node.Name, states)
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no approved and issued kubelet serving CSR for node %s yet, found %v", nodeName, states)
+	}
+	return certs, nil
+}
+
+// nodeIPs returns the InternalIP and ExternalIP addresses of a node. On CAPO
+// the ExternalIP of a control plane node is its floating IP.
+func nodeIPs(node *corev1.Node) []string {
+	var ips []string
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP || addr.Type == corev1.NodeExternalIP {
+			ips = append(ips, addr.Address)
+		}
+	}
+	return ips
 }
 
 func (s *csrSpec) nodes() []corev1.Node {
@@ -136,22 +157,46 @@ func (s *csrSpec) nodes() []corev1.Node {
 // chains to the cluster CA and covers the node's addresses, and until the
 // Machine records a CSRApproved event.
 func (s *csrSpec) expectNodeApproved(node *corev1.Node, roots *x509.CertPool) {
-	var cert *x509.Certificate
+	// The kubelet requests a new certificate when its addresses change, for
+	// example when a floating IP is attached, so wait for one that covers the
+	// node's current addresses.
 	Eventually(func() error {
-		var err error
-		cert, err = s.approvedCertificate(node)
-		return err
-	}, s.intervals("wait-csr-approved")...).Should(Succeed())
-
-	_, err := cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
-	Expect(err).ToNot(HaveOccurred(), "serving certificate of node %s should chain to the cluster CA", node.Name)
-	Expect(cert.Subject.CommonName).To(Equal(csr.NodeUserPrefix + node.Name))
-	for _, addr := range node.Status.Addresses {
-		if addr.Type == corev1.NodeInternalIP {
-			Expect(slices.ContainsFunc(cert.IPAddresses, net.ParseIP(addr.Address).Equal)).To(BeTrue(),
-				"serving certificate of node %s should cover its InternalIP %s", node.Name, addr.Address)
+		current := &corev1.Node{}
+		if err := s.workload.GetClient().Get(ctx, client.ObjectKeyFromObject(node), current); err != nil {
+			return err
 		}
-	}
+		ips := nodeIPs(current)
+		if len(ips) == 0 {
+			return fmt.Errorf("node %s has no InternalIP or ExternalIP yet", node.Name)
+		}
+		certs, err := s.approvedCertificates(node.Name)
+		if err != nil {
+			return err
+		}
+		var problems []string
+		for _, cert := range certs {
+			if _, err := cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+				problems = append(problems, fmt.Sprintf("serial %s does not chain to the cluster CA: %v", cert.SerialNumber, err))
+				continue
+			}
+			if cert.Subject.CommonName != csr.NodeUserPrefix+node.Name {
+				problems = append(problems, fmt.Sprintf("serial %s has common name %q", cert.SerialNumber, cert.Subject.CommonName))
+				continue
+			}
+			var missing []string
+			for _, ip := range ips {
+				if !slices.ContainsFunc(cert.IPAddresses, net.ParseIP(ip).Equal) {
+					missing = append(missing, ip)
+				}
+			}
+			if len(missing) == 0 {
+				Byf("Node %s serves a certificate signed by the cluster CA for %v", node.Name, ips)
+				return nil
+			}
+			problems = append(problems, fmt.Sprintf("serial %s does not cover %v", cert.SerialNumber, missing))
+		}
+		return fmt.Errorf("no approved certificate of node %s covers %v: %v", node.Name, ips, problems)
+	}, s.intervals("wait-csr-approved")...).Should(Succeed())
 
 	Eventually(func() ([]string, error) {
 		machines, err := s.machinesByNode()
