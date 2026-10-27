@@ -39,6 +39,13 @@ import (
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 )
 
+const (
+	// ccmPath and ccmResources mirror capie2e.CNIPath and capie2e.CNIResources
+	// for the cloud controller manager manifest.
+	ccmPath      = "CCM"
+	ccmResources = "CCM_RESOURCES"
+)
+
 var (
 	ctx = ctrl.SetupSignalHandler()
 
@@ -86,6 +93,13 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	cniPath := e2eConfig.MustGetVariable(capie2e.CNIPath)
 	Expect(cniPath).To(BeAnExistingFile(), "The %s variable should resolve to an existing file", capie2e.CNIPath)
 	createRepositoryInput.RegisterClusterResourceSetConfigMapTransformation(cniPath, capie2e.CNIResources)
+	// Providers with an external cloud controller manager (e.g. CAPO) get it
+	// the same way, like the CAPO e2e suite does.
+	if e2eConfig.HasVariable(ccmPath) {
+		ccm := e2eConfig.MustGetVariable(ccmPath)
+		Expect(ccm).To(BeAnExistingFile(), "The %s variable should resolve to an existing file", ccmPath)
+		createRepositoryInput.RegisterClusterResourceSetConfigMapTransformation(ccm, ccmResources)
+	}
 	clusterctlConfigPath = clusterctl.CreateRepository(ctx, createRepositoryInput)
 	Expect(clusterctlConfigPath).To(BeAnExistingFile())
 
@@ -102,16 +116,17 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		Expect(bootstrapClusterProvider).NotTo(BeNil(), "Failed to create a bootstrap cluster")
 		kubeconfigPath = bootstrapClusterProvider.GetKubeconfigPath()
 	}
-	bootstrapClusterProxy = framework.NewClusterProxy("bootstrap", kubeconfigPath, scheme, framework.WithMachineLogCollector(framework.DockerLogCollector{}))
+	bootstrapClusterProxy = newBootstrapClusterProxy(kubeconfigPath, scheme)
 	Expect(bootstrapClusterProxy).NotTo(BeNil())
 
-	By("Initializing the bootstrap cluster with Cluster API, CAPD and cluster-api-csr-approver")
+	By("Initializing the bootstrap cluster with Cluster API, the infrastructure provider and cluster-api-csr-approver")
 	clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, clusterctl.InitManagementClusterAndWatchControllerLogsInput{
-		ClusterProxy:            bootstrapClusterProxy,
-		ClusterctlConfigPath:    clusterctlConfigPath,
-		InfrastructureProviders: e2eConfig.InfrastructureProviders(),
-		AddonProviders:          e2eConfig.AddonProviders(),
-		LogFolder:               filepath.Join(artifactFolder, "clusters", bootstrapClusterProxy.GetName()),
+		ClusterProxy:              bootstrapClusterProxy,
+		ClusterctlConfigPath:      clusterctlConfigPath,
+		InfrastructureProviders:   e2eConfig.InfrastructureProviders(),
+		RuntimeExtensionProviders: e2eConfig.RuntimeExtensionProviders(),
+		AddonProviders:            e2eConfig.AddonProviders(),
+		LogFolder:                 filepath.Join(artifactFolder, "clusters", bootstrapClusterProxy.GetName()),
 	}, e2eConfig.GetIntervals(bootstrapClusterProxy.GetName(), "wait-controllers")...)
 
 	return []byte(strings.Join([]string{artifactFolder, configPath, clusterctlConfigPath, bootstrapClusterProxy.GetKubeconfigPath()}, ","))
@@ -122,7 +137,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	artifactFolder = parts[0]
 	e2eConfig = clusterctl.LoadE2EConfig(ctx, clusterctl.LoadE2EConfigInput{ConfigPath: parts[1]})
 	clusterctlConfigPath = parts[2]
-	bootstrapClusterProxy = framework.NewClusterProxy("bootstrap", parts[3], initScheme(), framework.WithMachineLogCollector(framework.DockerLogCollector{}))
+	bootstrapClusterProxy = newBootstrapClusterProxy(parts[3], initScheme())
 })
 
 var _ = SynchronizedAfterSuite(func() {}, func() {
@@ -137,6 +152,16 @@ var _ = SynchronizedAfterSuite(func() {}, func() {
 		bootstrapClusterProvider.Dispose(ctx)
 	}
 })
+
+// newBootstrapClusterProxy returns the management cluster proxy. Machine logs
+// are collected with docker exec when the workload cluster runs on CAPD.
+func newBootstrapClusterProxy(kubeconfigPath string, scheme *runtime.Scheme) framework.ClusterProxy {
+	var opts []framework.Option
+	if e2eConfig.HasDockerProvider() {
+		opts = append(opts, framework.WithMachineLogCollector(framework.DockerLogCollector{}))
+	}
+	return framework.NewClusterProxy("bootstrap", kubeconfigPath, scheme, opts...)
+}
 
 func initScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()

@@ -115,6 +115,10 @@ test-e2e: $(GINKGO) $(KUSTOMIZE) docker-build-e2e ## Run the end-to-end tests wi
 		-e2e.skip-resource-cleanup=$(SKIP_RESOURCE_CLEANUP) \
 		-e2e.use-existing-cluster=$(USE_EXISTING_CLUSTER)
 
+.PHONY: test-e2e-openstack
+test-e2e-openstack: ## Run the end-to-end tests against CAPO on OpenStack (see .github/workflows/e2e-openstack.yml).
+	$(MAKE) test-e2e E2E_CONF_FILE=$(ROOT_DIR)/test/e2e/config/openstack.yaml
+
 ##@ Build
 
 .PHONY: build

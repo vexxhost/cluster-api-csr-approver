@@ -1,0 +1,15 @@
+# OpenStack Resource Controller (ORC), which CAPO v0.15 needs to resolve
+# images and other OpenStack resources.
+#
+# ORC isn't a Cluster API provider. Like the CAPO e2e suite, label it as a
+# runtime extension so the clusterctl machinery in the Cluster API test
+# framework installs it alongside the providers.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      cluster.x-k8s.io/provider: runtime-extension-openstack-resource-controller
+
+resources:
+  - https://github.com/k-orc/openstack-resource-controller/releases/download/v2.6.0/install.yaml

@@ -1,0 +1,113 @@
+name: e2e-openstack
+
+# Runs the e2e suite against Cluster API provider for OpenStack (CAPO) on a
+# devstack cloud inside the runner, following the approach of
+# vexxhost/capo-image-elements. The workload cluster uses the OpenStack cloud
+# controller manager, so this checks approval against the addresses CAPO
+# reports, including the control plane floating IP.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OS_CLOUD: devstack
+  # Node image built by vexxhost/capo-image-elements. The Kubernetes version
+  # must match KUBERNETES_VERSION in test/e2e/config/openstack.yaml.
+  NODE_IMAGE_URL: https://github.com/vexxhost/capo-image-elements/releases/download/2026.05-7/ubuntu-24.04-v1.36.1.qcow2
+  NODE_IMAGE_NAME: ubuntu-24.04-v1.36.1
+  SSH_KEY_NAME: csr-approver-e2e
+  ARTIFACTS: ${{ github.workspace }}/_artifacts
+
+jobs:
+  e2e-openstack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Deploy OpenStack cloud
+        uses: gophercloud/devstack-action@v0.19
+        with:
+          enable_workaround_docker_io: false
+
+      - name: Allow Docker traffic
+        # Lets the kind management cluster reach the OpenStack APIs and the
+        # workload cluster's floating IPs.
+        run: sudo iptables -I DOCKER-USER -j ACCEPT
+
+      - name: Upload node image
+        run: |
+          curl -fsSL --retry 3 -o node-image.qcow2 "${NODE_IMAGE_URL}"
+          openstack image create --disk-format qcow2 --container-format bare --file node-image.qcow2 "${NODE_IMAGE_NAME}"
+          rm -f node-image.qcow2
+
+      - name: Create SSH keypair
+        run: openstack keypair create --private-key "${RUNNER_TEMP}/id_ed25519" "${SSH_KEY_NAME}" > /dev/null
+
+      - name: Export OpenStack credentials for the e2e suite
+        run: |
+          set -euo pipefail
+          clouds=/etc/openstack/clouds.yaml
+          auth_url=$(yq ".clouds.${OS_CLOUD}.auth.auth_url" "${clouds}")
+          case "${auth_url}" in */v3) ;; *) auth_url="${auth_url%/}/v3" ;; esac
+
+          # cloud.conf for the OpenStack cloud controller manager, using the
+          # same project CAPO creates the servers in.
+          cat > "${RUNNER_TEMP}/cloud.conf" <<EOF
+          [Global]
+          auth-url=${auth_url}
+          username=$(yq ".clouds.${OS_CLOUD}.auth.username" "${clouds}")
+          password=$(yq ".clouds.${OS_CLOUD}.auth.password" "${clouds}")
+          tenant-name=$(yq ".clouds.${OS_CLOUD}.auth.project_name" "${clouds}")
+          user-domain-id=$(yq ".clouds.${OS_CLOUD}.auth.user_domain_id // \"default\"" "${clouds}")
+          tenant-domain-id=$(yq ".clouds.${OS_CLOUD}.auth.project_domain_id // \"default\"" "${clouds}")
+          region=$(yq ".clouds.${OS_CLOUD}.region_name // \"RegionOne\"" "${clouds}")
+
+          [LoadBalancer]
+          enabled=false
+          EOF
+
+          echo "OPENSTACK_CLOUD_YAML_B64=$(base64 -w0 "${clouds}")" >> "${GITHUB_ENV}"
+          echo "OPENSTACK_CLOUD_PROVIDER_CONF_B64=$(base64 -w0 "${RUNNER_TEMP}/cloud.conf")" >> "${GITHUB_ENV}"
+
+      - name: Run e2e tests
+        run: make test-e2e-openstack ARTIFACTS="${ARTIFACTS}"
+
+      - name: Collect OpenStack state
+        if: failure()
+        run: |
+          mkdir -p "${ARTIFACTS}/openstack"
+          cd "${ARTIFACTS}/openstack"
+          openstack server list --long > servers.txt 2>&1 || true
+          openstack floating ip list > floating-ips.txt 2>&1 || true
+          openstack port list --long > ports.txt 2>&1 || true
+          for id in $(openstack server list -f value -c ID 2>/dev/null); do
+            openstack server show "${id}" > "server-${id}.txt" 2>&1 || true
+            openstack console log show "${id}" > "console-${id}.log" 2>&1 || true
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-openstack-artifacts
+          path: |
+            _artifacts
+            /tmp/devstack-logs
+          if-no-files-found: ignore
+          retention-days: 7

@@ -178,10 +178,10 @@ func (s *csrSpec) machineEvents(m *clusterv1.Machine) []string {
 	return out
 }
 
-func (s *csrSpec) expectAllNodesApproved() {
+func (s *csrSpec) expectAllNodesApproved(expectedNodes int) {
 	roots := s.clusterCA()
 	nodes := s.nodes()
-	Expect(nodes).To(HaveLen(3), "expected one control plane node and two workers")
+	Expect(nodes).To(HaveLen(expectedNodes))
 	for i := range nodes {
 		Byf("Checking node %s", nodes[i].Name)
 		s.expectNodeApproved(&nodes[i], roots)

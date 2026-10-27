@@ -102,6 +102,7 @@ variables:
   CAPI_INSECURE_DIAGNOSTICS: "true"
   CSR_APPROVER_INSECURE_DIAGNOSTICS: "true"
   CSR_APPROVER_DIAGNOSTICS_ADDRESS: ":8080"
+  CSR_E2E_WORKER_MACHINE_COUNT: "2"
 
 intervals:
   default/wait-controllers: ["5m", "10s"]

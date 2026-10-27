@@ -1,0 +1,264 @@
+# A CAPO workload cluster with kubelet serving certificates enabled.
+#
+# Based on cluster-template-without-lb.yaml from the CAPO v0.15.1 release and
+# the ClusterResourceSet components of the CAPO e2e suite. The control plane
+# endpoint is a floating IP on the control plane machine, so the
+# OpenStack cloud controller manager reports it on the Node and the kubelet
+# requests a serving certificate for it. cluster-api-csr-approver only
+# approves that request if CAPO also reports the floating IP on the Machine.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${CLUSTER_NAME}-cloud-config
+  labels:
+    clusterctl.cluster.x-k8s.io/move: "true"
+data:
+  cacert: ${OPENSTACK_CLOUD_CACERT_B64}
+  clouds.yaml: ${OPENSTACK_CLOUD_YAML_B64}
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ${CLUSTER_NAME}
+  labels:
+    cni: ${CLUSTER_NAME}-crs-0
+    ccm: ${CLUSTER_NAME}-crs-1
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    serviceDomain: cluster.local
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KubeadmControlPlane
+    name: ${CLUSTER_NAME}-control-plane
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: OpenStackCluster
+    name: ${CLUSTER_NAME}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: OpenStackCluster
+metadata:
+  name: ${CLUSTER_NAME}
+spec:
+  apiServer: {}
+  externalNetwork:
+    filter:
+      name: ${OPENSTACK_EXTERNAL_NETWORK_NAME}
+  identityRef:
+    cloudName: ${OPENSTACK_CLOUD}
+    name: ${CLUSTER_NAME}-cloud-config
+  managedSecurityGroups:
+    clusterNodesSecurityGroupRules:
+      - description: Created by cluster-api-provider-openstack - BGP (calico)
+        direction: ingress
+        etherType: IPv4
+        name: BGP (Calico)
+        portRangeMax: 179
+        portRangeMin: 179
+        protocol: tcp
+        remoteManagedGroups:
+          - controlplane
+          - worker
+      - description: Created by cluster-api-provider-openstack - IP-in-IP (calico)
+        direction: ingress
+        etherType: IPv4
+        name: IP-in-IP (calico)
+        protocol: "4"
+        remoteManagedGroups:
+          - controlplane
+          - worker
+  managedSubnets:
+    - cidr: 10.6.0.0/24
+      dnsNameservers:
+        - ${OPENSTACK_DNS_NAMESERVERS}
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlane
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+spec:
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+  version: ${KUBERNETES_VERSION}
+  machineTemplate:
+    spec:
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: OpenStackMachineTemplate
+        name: ${CLUSTER_NAME}-control-plane
+  kubeadmConfigSpec:
+    clusterConfiguration:
+      apiServer:
+        extraArgs:
+          - name: kubelet-certificate-authority
+            value: /etc/kubernetes/pki/ca.crt
+      controllerManager:
+        extraArgs:
+          - name: cloud-provider
+            value: external
+    initConfiguration:
+      nodeRegistration:
+        name: '{{ local_hostname }}'
+        kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+          - name: provider-id
+            value: openstack:///'{{ instance_id }}'
+      patches:
+        directory: /etc/kubernetes/patches
+    joinConfiguration:
+      nodeRegistration:
+        name: '{{ local_hostname }}'
+        kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+          - name: provider-id
+            value: openstack:///'{{ instance_id }}'
+      patches:
+        directory: /etc/kubernetes/patches
+    files:
+      - path: /etc/kubernetes/patches/kubeletconfiguration0+strategic.json
+        owner: root:root
+        permissions: "0644"
+        content: |
+          {"apiVersion": "kubelet.config.k8s.io/v1beta1", "kind": "KubeletConfiguration", "serverTLSBootstrap": true}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: OpenStackMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+spec:
+  template:
+    spec:
+      flavor:
+        filter:
+          name: ${OPENSTACK_CONTROL_PLANE_MACHINE_FLAVOR}
+      image:
+        filter:
+          name: ${OPENSTACK_IMAGE_NAME}
+      sshKeyName: ${OPENSTACK_SSH_KEY_NAME}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          name: '{{ local_hostname }}'
+          kubeletExtraArgs:
+            - name: cloud-provider
+              value: external
+            - name: provider-id
+              value: openstack:///'{{ instance_id }}'
+        patches:
+          directory: /etc/kubernetes/patches
+      files:
+        - path: /etc/kubernetes/patches/kubeletconfiguration0+strategic.json
+          owner: root:root
+          permissions: "0644"
+          content: |
+            {"apiVersion": "kubelet.config.k8s.io/v1beta1", "kind": "KubeletConfiguration", "serverTLSBootstrap": true}
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: ${WORKER_MACHINE_COUNT}
+  selector:
+    matchLabels: null
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      version: ${KUBERNETES_VERSION}
+      failureDomain: ${OPENSTACK_FAILURE_DOMAIN}
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: ${CLUSTER_NAME}-md-0
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: OpenStackMachineTemplate
+        name: ${CLUSTER_NAME}-md-0
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: OpenStackMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+spec:
+  template:
+    spec:
+      flavor:
+        filter:
+          name: ${OPENSTACK_NODE_MACHINE_FLAVOR}
+      image:
+        filter:
+          name: ${OPENSTACK_IMAGE_NAME}
+      sshKeyName: ${OPENSTACK_SSH_KEY_NAME}
+---
+# CNI (Calico, using IP-in-IP so pod traffic passes OpenStack port security).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cni-${CLUSTER_NAME}-crs-0
+data: ${CNI_RESOURCES}
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta2
+kind: ClusterResourceSet
+metadata:
+  name: ${CLUSTER_NAME}-crs-0
+spec:
+  strategy: ApplyOnce
+  clusterSelector:
+    matchLabels:
+      cni: ${CLUSTER_NAME}-crs-0
+  resources:
+    - kind: ConfigMap
+      name: cni-${CLUSTER_NAME}-crs-0
+---
+# OpenStack cloud controller manager. It sets the Node addresses the kubelet
+# puts in its serving certificate.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ccm-${CLUSTER_NAME}-crs-1
+data: ${CCM_RESOURCES}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ccm-${CLUSTER_NAME}-crs-1
+type: addons.cluster.x-k8s.io/resource-set
+stringData:
+  cloud-config-secret.yaml: |
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      # Referenced by the cloud controller manager DaemonSet.
+      name: cloud-config
+      namespace: kube-system
+    data:
+      cloud.conf: ${OPENSTACK_CLOUD_PROVIDER_CONF_B64}
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta2
+kind: ClusterResourceSet
+metadata:
+  name: ${CLUSTER_NAME}-crs-1
+spec:
+  strategy: ApplyOnce
+  clusterSelector:
+    matchLabels:
+      ccm: ${CLUSTER_NAME}-crs-1
+  resources:
+    - kind: ConfigMap
+      name: ccm-${CLUSTER_NAME}-crs-1
+    - kind: Secret
+      name: ccm-${CLUSTER_NAME}-crs-1
