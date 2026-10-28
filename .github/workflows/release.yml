@@ -38,7 +38,7 @@ jobs:
         run: |
           echo "value=-s -w -X sigs.k8s.io/cluster-api/version.gitVersion=$(git describe --tags --always) -X sigs.k8s.io/cluster-api/version.gitCommit=${GITHUB_SHA} -X sigs.k8s.io/cluster-api/version.buildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
       - id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
